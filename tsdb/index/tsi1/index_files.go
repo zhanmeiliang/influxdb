@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"io"
 	"sort"
+
+	"github.com/influxdata/influxdb/pkg/estimator/hll"
 )
 
 // IndexFiles represents a layered set of index files.
@@ -234,6 +236,22 @@ func (p *IndexFiles) writeMeasurementBlockTo(w io.Writer, info *indexCompactInfo
 		pos := info.tagSets[string(name)]
 		mw.Add(name, pos.offset, pos.size, seriesIDs)
 	}
+
+	// Generate merged sketches to write out.
+	sketch, tsketch := hll.NewDefaultPlus(), hll.NewDefaultPlus()
+
+	// merge all the sketches in the index files together.
+	for _, idx := range *p {
+		if err := sketch.Merge(idx.mblk.sketch); err != nil {
+			return err
+		}
+		if err := tsketch.Merge(idx.mblk.tsketch); err != nil {
+			return err
+		}
+	}
+
+	// Set the merged sketches on the measurement block writer.
+	mw.sketch, mw.tsketch = sketch, tsketch
 
 	// Write data to writer.
 	nn, err := mw.WriteTo(w)
