@@ -37,7 +37,10 @@ func Select(stmt *SelectStatement, ic IteratorCreator, sopt *SelectOptions) ([]I
 	if err != nil {
 		return nil, err
 	}
+	return buildIterators(stmt, ic, opt)
+}
 
+func buildIterators(stmt *SelectStatement, ic IteratorCreator, opt IteratorOptions) ([]Iterator, error) {
 	// Retrieve refs for each call and var ref.
 	info := newSelectInfo(stmt)
 	if len(info.calls) > 1 && len(info.refs) > 0 {
@@ -53,7 +56,7 @@ func Select(stmt *SelectStatement, ic IteratorCreator, sopt *SelectOptions) ([]I
 
 	// If there are multiple auxilary fields and no calls then construct an aux iterator.
 	if len(info.calls) == 0 && len(info.refs) > 0 {
-		return buildAuxIterators(stmt.Fields, ic, opt)
+		return buildAuxIterators(stmt.Fields, ic, stmt.Sources, opt)
 	}
 
 	// Include auxiliary fields from top() and bottom()
@@ -89,21 +92,73 @@ func Select(stmt *SelectStatement, ic IteratorCreator, sopt *SelectOptions) ([]I
 	selector := false
 	if len(info.calls) == 1 {
 		for call := range info.calls {
-			switch call.Name {
-			case "first", "last", "min", "max", "percentile":
-				selector = true
-			}
+			selector = IsSelector(call)
 		}
 	}
 
-	return buildFieldIterators(fields, ic, opt, selector)
+	return buildFieldIterators(fields, ic, stmt.Sources, opt, selector)
 }
 
 // buildAuxIterators creates a set of iterators from a single combined auxilary iterator.
-func buildAuxIterators(fields Fields, ic IteratorCreator, opt IteratorOptions) ([]Iterator, error) {
-	// Create iterator to read auxilary fields.
-	input, err := ic.CreateIterator(opt)
+func buildAuxIterators(fields Fields, ic IteratorCreator, sources Sources, opt IteratorOptions) ([]Iterator, error) {
+	// Create the auxiliary iterators for each source.
+	inputs := make([]Iterator, 0, len(sources))
+	if err := func() error {
+		for _, source := range sources {
+			switch source := source.(type) {
+			case *Measurement:
+				input, err := ic.CreateIterator(source, opt)
+				if err != nil {
+					return err
+				}
+				inputs = append(inputs, input)
+			case *SubQuery:
+				fields := make([]*Field, len(opt.Aux))
+				for i, name := range opt.Aux {
+					// Search through the fields to find one that matches this auxiliary field.
+					for _, f := range source.Statement.Fields {
+						if f.Name() == name.Val {
+							fields[i] = f
+							break
+						}
+					}
+
+					// There is no field that matches this name so signal this
+					// should be a nil iterator.
+					if fields[i] == nil {
+						fields[i] = &Field{Expr: (*nilLiteral)(nil)}
+					}
+				}
+
+				// Clone the statement and replace the fields with our custom ordering.
+				stmt := source.Statement.Clone()
+				stmt.Fields = fields
+
+				subOpt, err := newIteratorOptionsSubstatement(stmt, opt)
+				if err != nil {
+					return err
+				}
+
+				itrs, err := buildIterators(stmt, ic, subOpt)
+				if err != nil {
+					return err
+				}
+
+				// Construct the iterators for the subquery.
+				input := NewIteratorMapper(itrs, opt)
+				inputs = append(inputs, input)
+			}
+		}
+		return nil
+	}(); err != nil {
+		Iterators(inputs).Close()
+		return nil, err
+	}
+
+	// Merge iterators to read auxilary fields.
+	input, err := Iterators(inputs).Merge(opt)
 	if err != nil {
+		Iterators(inputs).Close()
 		return nil, err
 	} else if input == nil {
 		input = &nilFloatIterator{}
@@ -136,18 +191,11 @@ func buildAuxIterators(fields Fields, ic IteratorCreator, opt IteratorOptions) (
 	if err := func() error {
 		for i, f := range fields {
 			expr := Reduce(f.Expr, nil)
-			switch expr := expr.(type) {
-			case *VarRef:
-				itrs[i] = aitr.Iterator(expr.Val, expr.Type)
-			case *BinaryExpr:
-				itr, err := buildExprIterator(expr, aitr, opt, false)
-				if err != nil {
-					return fmt.Errorf("error constructing iterator for field '%s': %s", f.String(), err)
-				}
-				itrs[i] = itr
-			default:
-				return fmt.Errorf("invalid expression type: %T", expr)
+			itr, err := buildAuxIterator(expr, aitr, opt)
+			if err != nil {
+				return err
 			}
+			itrs[i] = itr
 		}
 		return nil
 	}(); err != nil {
@@ -162,8 +210,54 @@ func buildAuxIterators(fields Fields, ic IteratorCreator, opt IteratorOptions) (
 	return itrs, nil
 }
 
+// buildAuxIterator constructs an Iterator for an expression from an AuxIterator.
+func buildAuxIterator(expr Expr, aitr AuxIterator, opt IteratorOptions) (Iterator, error) {
+	switch expr := expr.(type) {
+	case *VarRef:
+		return aitr.Iterator(expr.Val, expr.Type), nil
+	case *BinaryExpr:
+		if rhs, ok := expr.RHS.(Literal); ok {
+			// The right hand side is a literal. It is more common to have the RHS be a literal,
+			// so we check that one first and have this be the happy path.
+			if lhs, ok := expr.LHS.(Literal); ok {
+				// We have two literals that couldn't be combined by Reduce.
+				return nil, fmt.Errorf("unable to construct an iterator from two literals: LHS: %T, RHS: %T", lhs, rhs)
+			}
+
+			lhs, err := buildAuxIterator(expr.LHS, aitr, opt)
+			if err != nil {
+				return nil, err
+			}
+			return buildRHSTransformIterator(lhs, rhs, expr.Op, opt)
+		} else if lhs, ok := expr.LHS.(Literal); ok {
+			rhs, err := buildAuxIterator(expr.RHS, aitr, opt)
+			if err != nil {
+				return nil, err
+			}
+			return buildLHSTransformIterator(lhs, rhs, expr.Op, opt)
+		} else {
+			// We have two iterators. Combine them into a single iterator.
+			lhs, err := buildAuxIterator(expr.LHS, aitr, opt)
+			if err != nil {
+				return nil, err
+			}
+			rhs, err := buildAuxIterator(expr.RHS, aitr, opt)
+			if err != nil {
+				return nil, err
+			}
+			return buildTransformIterator(lhs, rhs, expr.Op, opt)
+		}
+	case *ParenExpr:
+		return buildAuxIterator(expr.Expr, aitr, opt)
+	case *nilLiteral:
+		return &nilFloatIterator{}, nil
+	default:
+		return nil, fmt.Errorf("invalid expression type: %T", expr)
+	}
+}
+
 // buildFieldIterators creates an iterator for each field expression.
-func buildFieldIterators(fields Fields, ic IteratorCreator, opt IteratorOptions, selector bool) ([]Iterator, error) {
+func buildFieldIterators(fields Fields, ic IteratorCreator, sources Sources, opt IteratorOptions, selector bool) ([]Iterator, error) {
 	// Create iterators from fields against the iterator creator.
 	itrs := make([]Iterator, len(fields))
 
@@ -181,9 +275,11 @@ func buildFieldIterators(fields Fields, ic IteratorCreator, opt IteratorOptions,
 			}
 
 			expr := Reduce(f.Expr, nil)
-			itr, err := buildExprIterator(expr, ic, opt, selector)
+			itr, err := buildExprIterator(expr, ic, sources, opt, selector)
 			if err != nil {
 				return err
+			} else if itr == nil {
+				itr = &nilFloatIterator{}
 			}
 			itrs[i] = itr
 			input = itr
@@ -203,9 +299,11 @@ func buildFieldIterators(fields Fields, ic IteratorCreator, opt IteratorOptions,
 			}
 
 			expr := Reduce(f.Expr, nil)
-			itr, err := buildExprIterator(expr, aitr, opt, false)
+			itr, err := buildAuxIterator(expr, aitr, opt)
 			if err != nil {
 				return err
+			} else if itr == nil {
+				itr = &nilFloatIterator{}
 			}
 			itrs[i] = itr
 		}
@@ -228,24 +326,66 @@ func buildFieldIterators(fields Fields, ic IteratorCreator, opt IteratorOptions,
 }
 
 // buildExprIterator creates an iterator for an expression.
-func buildExprIterator(expr Expr, ic IteratorCreator, opt IteratorOptions, selector bool) (Iterator, error) {
+func buildExprIterator(expr Expr, ic IteratorCreator, sources Sources, opt IteratorOptions, selector bool) (Iterator, error) {
 	opt.Expr = expr
 
 	switch expr := expr.(type) {
 	case *VarRef:
-		itr, err := ic.CreateIterator(opt)
-		if err != nil {
+		inputs := make([]Iterator, 0, len(sources))
+		if err := func() error {
+			for _, source := range sources {
+				switch source := source.(type) {
+				case *Measurement:
+					input, err := ic.CreateIterator(source, opt)
+					if err != nil {
+						return err
+					}
+					inputs = append(inputs, input)
+				case *SubQuery:
+					// Look for the field that matches this name.
+					for _, f := range source.Statement.Fields {
+						if f.Name() == expr.Val {
+							// Construct an iterator for this field.
+							subOpt, err := newIteratorOptionsSubstatement(source.Statement, opt)
+							if err != nil {
+								return err
+							}
+							// Clear this if it got filled. We are not using them and don't want to confuse the iterator creator.
+							subOpt.Aux = nil
+
+							selector := IsSelector(f.Expr)
+							input, err := buildExprIterator(f.Expr, ic, source.Statement.Sources, subOpt, selector)
+							if err != nil {
+								return err
+							}
+							inputs = append(inputs, input)
+							break
+						}
+					}
+				}
+			}
+			return nil
+		}(); err != nil {
+			Iterators(inputs).Close()
 			return nil, err
-		} else if itr == nil {
+		}
+
+		// Variable references in this section will always go into some call
+		// iterator. Combine it with a merge iterator.
+		itr := NewMergeIterator(inputs, opt)
+		if itr == nil {
 			itr = &nilFloatIterator{}
+		}
+
+		if opt.InterruptCh != nil {
+			itr = NewInterruptIterator(itr, opt.InterruptCh)
 		}
 		return itr, nil
 	case *Call:
-		// FIXME(benbjohnson): Validate that only calls with 1 arg are passed to IC.
-
+		// TODO(jsternberg): Refactor this. This section needs to die in a fire.
 		switch expr.Name {
 		case "distinct":
-			input, err := buildExprIterator(expr.Args[0].(*VarRef), ic, opt, selector)
+			input, err := buildExprIterator(expr.Args[0].(*VarRef), ic, sources, opt, selector)
 			if err != nil {
 				return nil, err
 			}
@@ -255,7 +395,7 @@ func buildExprIterator(expr Expr, ic IteratorCreator, opt IteratorOptions, selec
 			}
 			return NewIntervalIterator(input, opt), nil
 		case "sample":
-			input, err := buildExprIterator(expr.Args[0], ic, opt, selector)
+			input, err := buildExprIterator(expr.Args[0], ic, sources, opt, selector)
 			if err != nil {
 				return nil, err
 			}
@@ -263,7 +403,7 @@ func buildExprIterator(expr Expr, ic IteratorCreator, opt IteratorOptions, selec
 
 			return newSampleIterator(input, opt, int(size.Val))
 		case "holt_winters", "holt_winters_with_fit":
-			input, err := buildExprIterator(expr.Args[0], ic, opt, selector)
+			input, err := buildExprIterator(expr.Args[0], ic, sources, opt, selector)
 			if err != nil {
 				return nil, err
 			}
@@ -288,7 +428,7 @@ func buildExprIterator(expr Expr, ic IteratorCreator, opt IteratorOptions, selec
 				}
 			}
 
-			input, err := buildExprIterator(expr.Args[0], ic, opt, selector)
+			input, err := buildExprIterator(expr.Args[0], ic, sources, opt, selector)
 			if err != nil {
 				return nil, err
 			}
@@ -316,7 +456,7 @@ func buildExprIterator(expr Expr, ic IteratorCreator, opt IteratorOptions, selec
 			}
 			panic(fmt.Sprintf("invalid series aggregate function: %s", expr.Name))
 		case "cumulative_sum":
-			input, err := buildExprIterator(expr.Args[0], ic, opt, selector)
+			input, err := buildExprIterator(expr.Args[0], ic, sources, opt, selector)
 			if err != nil {
 				return nil, err
 			}
@@ -325,53 +465,97 @@ func buildExprIterator(expr Expr, ic IteratorCreator, opt IteratorOptions, selec
 			itr, err := func() (Iterator, error) {
 				switch expr.Name {
 				case "count":
-					switch arg := expr.Args[0].(type) {
+					switch arg0 := expr.Args[0].(type) {
 					case *Call:
-						if arg.Name == "distinct" {
-							input, err := buildExprIterator(arg, ic, opt, selector)
+						if arg0.Name == "distinct" {
+							input, err := buildExprIterator(arg0, ic, sources, opt, selector)
 							if err != nil {
 								return nil, err
 							}
 							return newCountIterator(input, opt)
 						}
 					}
-
-					itr, err := ic.CreateIterator(opt)
-					if err != nil {
-						return nil, err
-					} else if itr == nil {
-						itr = &nilFloatIterator{}
-					}
-					return itr, nil
+					fallthrough
 				case "min", "max", "sum", "first", "last", "mean":
-					itr, err := ic.CreateIterator(opt)
+					inputs := make([]Iterator, 0, len(sources))
+					if err := func() error {
+						for _, source := range sources {
+							switch source := source.(type) {
+							case *Measurement:
+								input, err := ic.CreateIterator(source, opt)
+								if err != nil {
+									return err
+								}
+								inputs = append(inputs, input)
+							case *SubQuery:
+								// Identify the name of the field we are using.
+								arg0 := expr.Args[0].(*VarRef)
+
+								// Look for the field that matches this name.
+								for _, f := range source.Statement.Fields {
+									if f.Name() == arg0.Val {
+										// Construct an iterator for this field.
+										subOpt, err := newIteratorOptionsSubstatement(source.Statement, opt)
+										if err != nil {
+											return err
+										}
+										// Clear this if it got filled. We are not using them and don't want to confuse the iterator creator.
+										subOpt.Aux = nil
+
+										selector := IsSelector(f.Expr)
+										input, err := buildExprIterator(f.Expr, ic, source.Statement.Sources, subOpt, selector)
+										if err != nil {
+											return err
+										}
+
+										// Wrap the result in a call iterator.
+										i, err := NewCallIterator(input, opt)
+										if err != nil {
+											input.Close()
+											return err
+										}
+										inputs = append(inputs, i)
+										break
+									}
+								}
+							}
+						}
+						return nil
+					}(); err != nil {
+						Iterators(inputs).Close()
+						return nil, err
+					}
+
+					itr, err := Iterators(inputs).Merge(opt)
 					if err != nil {
+						Iterators(inputs).Close()
 						return nil, err
 					} else if itr == nil {
 						itr = &nilFloatIterator{}
 					}
 					return itr, nil
 				case "median":
-					input, err := buildExprIterator(expr.Args[0].(*VarRef), ic, opt, false)
+					opt.Ordered = true
+					input, err := buildExprIterator(expr.Args[0].(*VarRef), ic, sources, opt, false)
 					if err != nil {
 						return nil, err
 					}
 					return newMedianIterator(input, opt)
 				case "mode":
-					input, err := buildExprIterator(expr.Args[0].(*VarRef), ic, opt, false)
+					input, err := buildExprIterator(expr.Args[0].(*VarRef), ic, sources, opt, false)
 					if err != nil {
 						return nil, err
 					}
 					return NewModeIterator(input, opt)
 				case "stddev":
-					input, err := buildExprIterator(expr.Args[0].(*VarRef), ic, opt, false)
+					input, err := buildExprIterator(expr.Args[0].(*VarRef), ic, sources, opt, false)
 					if err != nil {
 						return nil, err
 					}
 					return newStddevIterator(input, opt)
 				case "spread":
 					// OPTIMIZE(benbjohnson): convert to map/reduce
-					input, err := buildExprIterator(expr.Args[0].(*VarRef), ic, opt, false)
+					input, err := buildExprIterator(expr.Args[0].(*VarRef), ic, sources, opt, false)
 					if err != nil {
 						return nil, err
 					}
@@ -394,7 +578,7 @@ func buildExprIterator(expr Expr, ic IteratorCreator, opt IteratorOptions, selec
 						}
 					}
 
-					input, err := buildExprIterator(expr.Args[0].(*VarRef), ic, opt, false)
+					input, err := buildExprIterator(expr.Args[0].(*VarRef), ic, sources, opt, false)
 					if err != nil {
 						return nil, err
 					}
@@ -418,14 +602,15 @@ func buildExprIterator(expr Expr, ic IteratorCreator, opt IteratorOptions, selec
 						}
 					}
 
-					input, err := buildExprIterator(expr.Args[0].(*VarRef), ic, opt, false)
+					input, err := buildExprIterator(expr.Args[0].(*VarRef), ic, sources, opt, false)
 					if err != nil {
 						return nil, err
 					}
 					n := expr.Args[len(expr.Args)-1].(*IntegerLiteral)
 					return newBottomIterator(input, opt, n, tags)
 				case "percentile":
-					input, err := buildExprIterator(expr.Args[0].(*VarRef), ic, opt, false)
+					opt.Ordered = true
+					input, err := buildExprIterator(expr.Args[0].(*VarRef), ic, sources, opt, false)
 					if err != nil {
 						return nil, err
 					}
@@ -468,37 +653,37 @@ func buildExprIterator(expr Expr, ic IteratorCreator, opt IteratorOptions, selec
 				return nil, fmt.Errorf("unable to construct an iterator from two literals: LHS: %T, RHS: %T", lhs, rhs)
 			}
 
-			lhs, err := buildExprIterator(expr.LHS, ic, opt, false)
+			lhs, err := buildExprIterator(expr.LHS, ic, sources, opt, IsSelector(expr.LHS))
 			if err != nil {
 				return nil, err
 			}
-			return buildRHSTransformIterator(lhs, rhs, expr.Op, ic, opt)
+			return buildRHSTransformIterator(lhs, rhs, expr.Op, opt)
 		} else if lhs, ok := expr.LHS.(Literal); ok {
-			rhs, err := buildExprIterator(expr.RHS, ic, opt, false)
+			rhs, err := buildExprIterator(expr.RHS, ic, sources, opt, IsSelector(expr.RHS))
 			if err != nil {
 				return nil, err
 			}
-			return buildLHSTransformIterator(lhs, rhs, expr.Op, ic, opt)
+			return buildLHSTransformIterator(lhs, rhs, expr.Op, opt)
 		} else {
 			// We have two iterators. Combine them into a single iterator.
-			lhs, err := buildExprIterator(expr.LHS, ic, opt, false)
+			lhs, err := buildExprIterator(expr.LHS, ic, sources, opt, false)
 			if err != nil {
 				return nil, err
 			}
-			rhs, err := buildExprIterator(expr.RHS, ic, opt, false)
+			rhs, err := buildExprIterator(expr.RHS, ic, sources, opt, false)
 			if err != nil {
 				return nil, err
 			}
-			return buildTransformIterator(lhs, rhs, expr.Op, ic, opt)
+			return buildTransformIterator(lhs, rhs, expr.Op, opt)
 		}
 	case *ParenExpr:
-		return buildExprIterator(expr.Expr, ic, opt, selector)
+		return buildExprIterator(expr.Expr, ic, sources, opt, selector)
 	default:
 		return nil, fmt.Errorf("invalid expression type: %T", expr)
 	}
 }
 
-func buildRHSTransformIterator(lhs Iterator, rhs Literal, op Token, ic IteratorCreator, opt IteratorOptions) (Iterator, error) {
+func buildRHSTransformIterator(lhs Iterator, rhs Literal, op Token, opt IteratorOptions) (Iterator, error) {
 	fn := binaryExprFunc(iteratorDataType(lhs), literalDataType(rhs), op)
 	switch fn := fn.(type) {
 	case func(float64, float64) float64:
@@ -677,7 +862,7 @@ func buildRHSTransformIterator(lhs Iterator, rhs Literal, op Token, ic IteratorC
 	return nil, fmt.Errorf("unable to construct rhs transform iterator from %T and %T", lhs, rhs)
 }
 
-func buildLHSTransformIterator(lhs Literal, rhs Iterator, op Token, ic IteratorCreator, opt IteratorOptions) (Iterator, error) {
+func buildLHSTransformIterator(lhs Literal, rhs Iterator, op Token, opt IteratorOptions) (Iterator, error) {
 	fn := binaryExprFunc(literalDataType(lhs), iteratorDataType(rhs), op)
 	switch fn := fn.(type) {
 	case func(float64, float64) float64:
@@ -856,7 +1041,7 @@ func buildLHSTransformIterator(lhs Literal, rhs Iterator, op Token, ic IteratorC
 	return nil, fmt.Errorf("unable to construct lhs transform iterator from %T and %T", lhs, rhs)
 }
 
-func buildTransformIterator(lhs Iterator, rhs Iterator, op Token, ic IteratorCreator, opt IteratorOptions) (Iterator, error) {
+func buildTransformIterator(lhs Iterator, rhs Iterator, op Token, opt IteratorOptions) (Iterator, error) {
 	fn := binaryExprFunc(iteratorDataType(lhs), iteratorDataType(rhs), op)
 	switch fn := fn.(type) {
 	case func(float64, float64) float64:

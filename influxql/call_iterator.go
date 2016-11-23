@@ -73,19 +73,19 @@ func newCountIterator(input Iterator, opt IteratorOptions) (Iterator, error) {
 			fn := NewIntegerFuncReducer(IntegerCountReduce, &IntegerPoint{Value: 0, Time: ZeroTime})
 			return fn, fn
 		}
-		return &integerReduceIntegerIterator{input: newBufIntegerIterator(input), opt: opt, create: createFn}, nil
+		return newIntegerReduceIntegerIterator(input, opt, createFn), nil
 	case StringIterator:
 		createFn := func() (StringPointAggregator, IntegerPointEmitter) {
 			fn := NewStringFuncIntegerReducer(StringCountReduce, &IntegerPoint{Value: 0, Time: ZeroTime})
 			return fn, fn
 		}
-		return &stringReduceIntegerIterator{input: newBufStringIterator(input), opt: opt, create: createFn}, nil
+		return newStringReduceIntegerIterator(input, opt, createFn), nil
 	case BooleanIterator:
 		createFn := func() (BooleanPointAggregator, IntegerPointEmitter) {
 			fn := NewBooleanFuncIntegerReducer(BooleanCountReduce, &IntegerPoint{Value: 0, Time: ZeroTime})
 			return fn, fn
 		}
-		return &booleanReduceIntegerIterator{input: newBufBooleanIterator(input), opt: opt, create: createFn}, nil
+		return newBooleanReduceIntegerIterator(input, opt, createFn), nil
 	default:
 		return nil, fmt.Errorf("unsupported count iterator type: %T", input)
 	}
@@ -131,19 +131,19 @@ func newMinIterator(input Iterator, opt IteratorOptions) (Iterator, error) {
 			fn := NewFloatFuncReducer(FloatMinReduce, nil)
 			return fn, fn
 		}
-		return &floatReduceFloatIterator{input: newBufFloatIterator(input), opt: opt, create: createFn}, nil
+		return newFloatReduceFloatIterator(input, opt, createFn), nil
 	case IntegerIterator:
 		createFn := func() (IntegerPointAggregator, IntegerPointEmitter) {
 			fn := NewIntegerFuncReducer(IntegerMinReduce, nil)
 			return fn, fn
 		}
-		return &integerReduceIntegerIterator{input: newBufIntegerIterator(input), opt: opt, create: createFn}, nil
+		return newIntegerReduceIntegerIterator(input, opt, createFn), nil
 	case BooleanIterator:
 		createFn := func() (BooleanPointAggregator, BooleanPointEmitter) {
 			fn := NewBooleanFuncReducer(BooleanMinReduce, nil)
 			return fn, fn
 		}
-		return &booleanReduceBooleanIterator{input: newBufBooleanIterator(input), opt: opt, create: createFn}, nil
+		return newBooleanReduceBooleanIterator(input, opt, createFn), nil
 	default:
 		return nil, fmt.Errorf("unsupported min iterator type: %T", input)
 	}
@@ -181,19 +181,19 @@ func newMaxIterator(input Iterator, opt IteratorOptions) (Iterator, error) {
 			fn := NewFloatFuncReducer(FloatMaxReduce, nil)
 			return fn, fn
 		}
-		return &floatReduceFloatIterator{input: newBufFloatIterator(input), opt: opt, create: createFn}, nil
+		return newFloatReduceFloatIterator(input, opt, createFn), nil
 	case IntegerIterator:
 		createFn := func() (IntegerPointAggregator, IntegerPointEmitter) {
 			fn := NewIntegerFuncReducer(IntegerMaxReduce, nil)
 			return fn, fn
 		}
-		return &integerReduceIntegerIterator{input: newBufIntegerIterator(input), opt: opt, create: createFn}, nil
+		return newIntegerReduceIntegerIterator(input, opt, createFn), nil
 	case BooleanIterator:
 		createFn := func() (BooleanPointAggregator, BooleanPointEmitter) {
 			fn := NewBooleanFuncReducer(BooleanMaxReduce, nil)
 			return fn, fn
 		}
-		return &booleanReduceBooleanIterator{input: newBufBooleanIterator(input), opt: opt, create: createFn}, nil
+		return newBooleanReduceBooleanIterator(input, opt, createFn), nil
 	default:
 		return nil, fmt.Errorf("unsupported max iterator type: %T", input)
 	}
@@ -231,13 +231,13 @@ func newSumIterator(input Iterator, opt IteratorOptions) (Iterator, error) {
 			fn := NewFloatFuncReducer(FloatSumReduce, &FloatPoint{Value: 0, Time: ZeroTime})
 			return fn, fn
 		}
-		return &floatReduceFloatIterator{input: newBufFloatIterator(input), opt: opt, create: createFn}, nil
+		return newFloatReduceFloatIterator(input, opt, createFn), nil
 	case IntegerIterator:
 		createFn := func() (IntegerPointAggregator, IntegerPointEmitter) {
 			fn := NewIntegerFuncReducer(IntegerSumReduce, &IntegerPoint{Value: 0, Time: ZeroTime})
 			return fn, fn
 		}
-		return &integerReduceIntegerIterator{input: newBufIntegerIterator(input), opt: opt, create: createFn}, nil
+		return newIntegerReduceIntegerIterator(input, opt, createFn), nil
 	default:
 		return nil, fmt.Errorf("unsupported sum iterator type: %T", input)
 	}
@@ -267,25 +267,25 @@ func newFirstIterator(input Iterator, opt IteratorOptions) (Iterator, error) {
 			fn := NewFloatFuncReducer(FloatFirstReduce, nil)
 			return fn, fn
 		}
-		return &floatReduceFloatIterator{input: newBufFloatIterator(input), opt: opt, create: createFn}, nil
+		return newFloatReduceFloatIterator(input, opt, createFn), nil
 	case IntegerIterator:
 		createFn := func() (IntegerPointAggregator, IntegerPointEmitter) {
 			fn := NewIntegerFuncReducer(IntegerFirstReduce, nil)
 			return fn, fn
 		}
-		return &integerReduceIntegerIterator{input: newBufIntegerIterator(input), opt: opt, create: createFn}, nil
+		return newIntegerReduceIntegerIterator(input, opt, createFn), nil
 	case StringIterator:
 		createFn := func() (StringPointAggregator, StringPointEmitter) {
 			fn := NewStringFuncReducer(StringFirstReduce, nil)
 			return fn, fn
 		}
-		return &stringReduceStringIterator{input: newBufStringIterator(input), opt: opt, create: createFn}, nil
+		return newStringReduceStringIterator(input, opt, createFn), nil
 	case BooleanIterator:
 		createFn := func() (BooleanPointAggregator, BooleanPointEmitter) {
 			fn := NewBooleanFuncReducer(BooleanFirstReduce, nil)
 			return fn, fn
 		}
-		return &booleanReduceBooleanIterator{input: newBufBooleanIterator(input), opt: opt, create: createFn}, nil
+		return newBooleanReduceBooleanIterator(input, opt, createFn), nil
 	default:
 		return nil, fmt.Errorf("unsupported first iterator type: %T", input)
 	}
@@ -331,25 +331,25 @@ func newLastIterator(input Iterator, opt IteratorOptions) (Iterator, error) {
 			fn := NewFloatFuncReducer(FloatLastReduce, nil)
 			return fn, fn
 		}
-		return &floatReduceFloatIterator{input: newBufFloatIterator(input), opt: opt, create: createFn}, nil
+		return newFloatReduceFloatIterator(input, opt, createFn), nil
 	case IntegerIterator:
 		createFn := func() (IntegerPointAggregator, IntegerPointEmitter) {
 			fn := NewIntegerFuncReducer(IntegerLastReduce, nil)
 			return fn, fn
 		}
-		return &integerReduceIntegerIterator{input: newBufIntegerIterator(input), opt: opt, create: createFn}, nil
+		return newIntegerReduceIntegerIterator(input, opt, createFn), nil
 	case StringIterator:
 		createFn := func() (StringPointAggregator, StringPointEmitter) {
 			fn := NewStringFuncReducer(StringLastReduce, nil)
 			return fn, fn
 		}
-		return &stringReduceStringIterator{input: newBufStringIterator(input), opt: opt, create: createFn}, nil
+		return newStringReduceStringIterator(input, opt, createFn), nil
 	case BooleanIterator:
 		createFn := func() (BooleanPointAggregator, BooleanPointEmitter) {
 			fn := NewBooleanFuncReducer(BooleanLastReduce, nil)
 			return fn, fn
 		}
-		return &booleanReduceBooleanIterator{input: newBufBooleanIterator(input), opt: opt, create: createFn}, nil
+		return newBooleanReduceBooleanIterator(input, opt, createFn), nil
 	default:
 		return nil, fmt.Errorf("unsupported last iterator type: %T", input)
 	}
@@ -395,25 +395,25 @@ func NewDistinctIterator(input Iterator, opt IteratorOptions) (Iterator, error) 
 			fn := NewFloatDistinctReducer()
 			return fn, fn
 		}
-		return &floatReduceFloatIterator{input: newBufFloatIterator(input), opt: opt, create: createFn}, nil
+		return newFloatReduceFloatIterator(input, opt, createFn), nil
 	case IntegerIterator:
 		createFn := func() (IntegerPointAggregator, IntegerPointEmitter) {
 			fn := NewIntegerDistinctReducer()
 			return fn, fn
 		}
-		return &integerReduceIntegerIterator{input: newBufIntegerIterator(input), opt: opt, create: createFn}, nil
+		return newIntegerReduceIntegerIterator(input, opt, createFn), nil
 	case StringIterator:
 		createFn := func() (StringPointAggregator, StringPointEmitter) {
 			fn := NewStringDistinctReducer()
 			return fn, fn
 		}
-		return &stringReduceStringIterator{input: newBufStringIterator(input), opt: opt, create: createFn}, nil
+		return newStringReduceStringIterator(input, opt, createFn), nil
 	case BooleanIterator:
 		createFn := func() (BooleanPointAggregator, BooleanPointEmitter) {
 			fn := NewBooleanDistinctReducer()
 			return fn, fn
 		}
-		return &booleanReduceBooleanIterator{input: newBufBooleanIterator(input), opt: opt, create: createFn}, nil
+		return newBooleanReduceBooleanIterator(input, opt, createFn), nil
 	default:
 		return nil, fmt.Errorf("unsupported distinct iterator type: %T", input)
 	}
@@ -427,13 +427,13 @@ func newMeanIterator(input Iterator, opt IteratorOptions) (Iterator, error) {
 			fn := NewFloatMeanReducer()
 			return fn, fn
 		}
-		return &floatReduceFloatIterator{input: newBufFloatIterator(input), opt: opt, create: createFn}, nil
+		return newFloatReduceFloatIterator(input, opt, createFn), nil
 	case IntegerIterator:
 		createFn := func() (IntegerPointAggregator, FloatPointEmitter) {
 			fn := NewIntegerMeanReducer()
 			return fn, fn
 		}
-		return &integerReduceFloatIterator{input: newBufIntegerIterator(input), opt: opt, create: createFn}, nil
+		return newIntegerReduceFloatIterator(input, opt, createFn), nil
 	default:
 		return nil, fmt.Errorf("unsupported mean iterator type: %T", input)
 	}
@@ -452,13 +452,13 @@ func newMedianIterator(input Iterator, opt IteratorOptions) (Iterator, error) {
 			fn := NewFloatSliceFuncReducer(FloatMedianReduceSlice)
 			return fn, fn
 		}
-		return &floatReduceFloatIterator{input: newBufFloatIterator(input), opt: opt, create: createFn}, nil
+		return newFloatReduceFloatIterator(input, opt, createFn), nil
 	case IntegerIterator:
 		createFn := func() (IntegerPointAggregator, FloatPointEmitter) {
 			fn := NewIntegerSliceFuncFloatReducer(IntegerMedianReduceSlice)
 			return fn, fn
 		}
-		return &integerReduceFloatIterator{input: newBufIntegerIterator(input), opt: opt, create: createFn}, nil
+		return newIntegerReduceFloatIterator(input, opt, createFn), nil
 	default:
 		return nil, fmt.Errorf("unsupported median iterator type: %T", input)
 	}
@@ -509,26 +509,25 @@ func NewModeIterator(input Iterator, opt IteratorOptions) (Iterator, error) {
 			fn := NewFloatSliceFuncReducer(FloatModeReduceSlice)
 			return fn, fn
 		}
-		return &floatReduceFloatIterator{input: newBufFloatIterator(input), opt: opt, create: createFn}, nil
+		return newFloatReduceFloatIterator(input, opt, createFn), nil
 	case IntegerIterator:
 		createFn := func() (IntegerPointAggregator, IntegerPointEmitter) {
 			fn := NewIntegerSliceFuncReducer(IntegerModeReduceSlice)
 			return fn, fn
 		}
-		return &integerReduceIntegerIterator{input: newBufIntegerIterator(input), opt: opt, create: createFn}, nil
+		return newIntegerReduceIntegerIterator(input, opt, createFn), nil
 	case StringIterator:
 		createFn := func() (StringPointAggregator, StringPointEmitter) {
 			fn := NewStringSliceFuncReducer(StringModeReduceSlice)
 			return fn, fn
 		}
-		return &stringReduceStringIterator{input: newBufStringIterator(input), opt: opt, create: createFn}, nil
+		return newStringReduceStringIterator(input, opt, createFn), nil
 	case BooleanIterator:
 		createFn := func() (BooleanPointAggregator, BooleanPointEmitter) {
 			fn := NewBooleanSliceFuncReducer(BooleanModeReduceSlice)
 			return fn, fn
 		}
-		return &booleanReduceBooleanIterator{input: newBufBooleanIterator(input), opt: opt, create: createFn}, nil
-
+		return newBooleanReduceBooleanIterator(input, opt, createFn), nil
 	default:
 		return nil, fmt.Errorf("unsupported median iterator type: %T", input)
 	}
@@ -670,13 +669,13 @@ func newStddevIterator(input Iterator, opt IteratorOptions) (Iterator, error) {
 			fn := NewFloatSliceFuncReducer(FloatStddevReduceSlice)
 			return fn, fn
 		}
-		return &floatReduceFloatIterator{input: newBufFloatIterator(input), opt: opt, create: createFn}, nil
+		return newFloatReduceFloatIterator(input, opt, createFn), nil
 	case IntegerIterator:
 		createFn := func() (IntegerPointAggregator, FloatPointEmitter) {
 			fn := NewIntegerSliceFuncFloatReducer(IntegerStddevReduceSlice)
 			return fn, fn
 		}
-		return &integerReduceFloatIterator{input: newBufIntegerIterator(input), opt: opt, create: createFn}, nil
+		return newIntegerReduceFloatIterator(input, opt, createFn), nil
 	default:
 		return nil, fmt.Errorf("unsupported stddev iterator type: %T", input)
 	}
@@ -748,13 +747,13 @@ func newSpreadIterator(input Iterator, opt IteratorOptions) (Iterator, error) {
 			fn := NewFloatSliceFuncReducer(FloatSpreadReduceSlice)
 			return fn, fn
 		}
-		return &floatReduceFloatIterator{input: newBufFloatIterator(input), opt: opt, create: createFn}, nil
+		return newFloatReduceFloatIterator(input, opt, createFn), nil
 	case IntegerIterator:
 		createFn := func() (IntegerPointAggregator, IntegerPointEmitter) {
 			fn := NewIntegerSliceFuncReducer(IntegerSpreadReduceSlice)
 			return fn, fn
 		}
-		return &integerReduceIntegerIterator{input: newBufIntegerIterator(input), opt: opt, create: createFn}, nil
+		return newIntegerReduceIntegerIterator(input, opt, createFn), nil
 	default:
 		return nil, fmt.Errorf("unsupported spread iterator type: %T", input)
 	}
@@ -794,14 +793,14 @@ func newTopIterator(input Iterator, opt IteratorOptions, n *IntegerLiteral, tags
 			fn := NewFloatSliceFuncReducer(aggregateFn)
 			return fn, fn
 		}
-		return &floatReduceFloatIterator{input: newBufFloatIterator(input), opt: opt, create: createFn}, nil
+		return newFloatReduceFloatIterator(input, opt, createFn), nil
 	case IntegerIterator:
 		aggregateFn := NewIntegerTopReduceSliceFunc(int(n.Val), tags, opt.Interval)
 		createFn := func() (IntegerPointAggregator, IntegerPointEmitter) {
 			fn := NewIntegerSliceFuncReducer(aggregateFn)
 			return fn, fn
 		}
-		return &integerReduceIntegerIterator{input: newBufIntegerIterator(input), opt: opt, create: createFn}, nil
+		return newIntegerReduceIntegerIterator(input, opt, createFn), nil
 	default:
 		return nil, fmt.Errorf("unsupported top iterator type: %T", input)
 	}
@@ -907,14 +906,14 @@ func newBottomIterator(input Iterator, opt IteratorOptions, n *IntegerLiteral, t
 			fn := NewFloatSliceFuncReducer(aggregateFn)
 			return fn, fn
 		}
-		return &floatReduceFloatIterator{input: newBufFloatIterator(input), opt: opt, create: createFn}, nil
+		return newFloatReduceFloatIterator(input, opt, createFn), nil
 	case IntegerIterator:
 		aggregateFn := NewIntegerBottomReduceSliceFunc(int(n.Val), tags, opt.Interval)
 		createFn := func() (IntegerPointAggregator, IntegerPointEmitter) {
 			fn := NewIntegerSliceFuncReducer(aggregateFn)
 			return fn, fn
 		}
-		return &integerReduceIntegerIterator{input: newBufIntegerIterator(input), opt: opt, create: createFn}, nil
+		return newIntegerReduceIntegerIterator(input, opt, createFn), nil
 	default:
 		return nil, fmt.Errorf("unsupported bottom iterator type: %T", input)
 	}
@@ -1081,14 +1080,14 @@ func newPercentileIterator(input Iterator, opt IteratorOptions, percentile float
 			fn := NewFloatSliceFuncReducer(floatPercentileReduceSlice)
 			return fn, fn
 		}
-		return &floatReduceFloatIterator{input: newBufFloatIterator(input), opt: opt, create: createFn}, nil
+		return newFloatReduceFloatIterator(input, opt, createFn), nil
 	case IntegerIterator:
 		integerPercentileReduceSlice := NewIntegerPercentileReduceSliceFunc(percentile)
 		createFn := func() (IntegerPointAggregator, IntegerPointEmitter) {
 			fn := NewIntegerSliceFuncReducer(integerPercentileReduceSlice)
 			return fn, fn
 		}
-		return &integerReduceIntegerIterator{input: newBufIntegerIterator(input), opt: opt, create: createFn}, nil
+		return newIntegerReduceIntegerIterator(input, opt, createFn), nil
 	default:
 		return nil, fmt.Errorf("unsupported percentile iterator type: %T", input)
 	}
@@ -1244,13 +1243,13 @@ func newHoltWintersIterator(input Iterator, opt IteratorOptions, h, m int, inclu
 			fn := NewFloatHoltWintersReducer(h, m, includeFitData, interval)
 			return fn, fn
 		}
-		return &floatReduceFloatIterator{input: newBufFloatIterator(input), opt: opt, create: createFn}, nil
+		return newFloatReduceFloatIterator(input, opt, createFn), nil
 	case IntegerIterator:
 		createFn := func() (IntegerPointAggregator, FloatPointEmitter) {
 			fn := NewFloatHoltWintersReducer(h, m, includeFitData, interval)
 			return fn, fn
 		}
-		return &integerReduceFloatIterator{input: newBufIntegerIterator(input), opt: opt, create: createFn}, nil
+		return newIntegerReduceFloatIterator(input, opt, createFn), nil
 	default:
 		return nil, fmt.Errorf("unsupported elapsed iterator type: %T", input)
 	}
@@ -1269,25 +1268,25 @@ func newSampleIterator(input Iterator, opt IteratorOptions, size int) (Iterator,
 			fn := NewFloatSampleReducer(size)
 			return fn, fn
 		}
-		return &floatReduceFloatIterator{input: newBufFloatIterator(input), opt: opt, create: createFn}, nil
+		return newFloatReduceFloatIterator(input, opt, createFn), nil
 	case IntegerIterator:
 		createFn := func() (IntegerPointAggregator, IntegerPointEmitter) {
 			fn := NewIntegerSampleReducer(size)
 			return fn, fn
 		}
-		return &integerReduceIntegerIterator{input: newBufIntegerIterator(input), opt: opt, create: createFn}, nil
+		return newIntegerReduceIntegerIterator(input, opt, createFn), nil
 	case StringIterator:
 		createFn := func() (StringPointAggregator, StringPointEmitter) {
 			fn := NewStringSampleReducer(size)
 			return fn, fn
 		}
-		return &stringReduceStringIterator{input: newBufStringIterator(input), opt: opt, create: createFn}, nil
+		return newStringReduceStringIterator(input, opt, createFn), nil
 	case BooleanIterator:
 		createFn := func() (BooleanPointAggregator, BooleanPointEmitter) {
 			fn := NewBooleanSampleReducer(size)
 			return fn, fn
 		}
-		return &booleanReduceBooleanIterator{input: newBufBooleanIterator(input), opt: opt, create: createFn}, nil
+		return newBooleanReduceBooleanIterator(input, opt, createFn), nil
 	default:
 		return nil, fmt.Errorf("unsupported elapsed iterator type: %T", input)
 	}

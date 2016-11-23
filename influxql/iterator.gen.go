@@ -9,7 +9,6 @@ package influxql
 import (
 	"container/heap"
 	"encoding/binary"
-	"errors"
 	"fmt"
 	"io"
 	"sort"
@@ -550,10 +549,6 @@ func (itr *floatLimitIterator) Next() (*FloatPoint, error) {
 
 		// Read next point if we're beyond the limit.
 		if itr.opt.Limit > 0 && (itr.n-itr.opt.Offset) > itr.opt.Limit {
-			// If there's no interval, no groups, and a single source then simply exit.
-			if itr.opt.Interval.IsZero() && len(itr.opt.Dimensions) == 0 && len(itr.opt.Sources) == 1 {
-				return nil, nil
-			}
 			continue
 		}
 
@@ -869,28 +864,6 @@ func (itr *floatAuxIterator) Iterator(name string, typ DataType) Iterator {
 	return itr.fields.iterator(name, typ)
 }
 
-func (itr *floatAuxIterator) CreateIterator(opt IteratorOptions) (Iterator, error) {
-	expr := opt.Expr
-	if expr == nil {
-		panic("unable to create an iterator with no expression from an aux iterator")
-	}
-
-	switch expr := expr.(type) {
-	case *VarRef:
-		return itr.Iterator(expr.Val, expr.Type), nil
-	default:
-		panic(fmt.Sprintf("invalid expression type for an aux iterator: %T", expr))
-	}
-}
-
-func (itr *floatAuxIterator) FieldDimensions(sources Sources) (fields map[string]DataType, dimensions map[string]struct{}, err error) {
-	return nil, nil, errors.New("not implemented")
-}
-
-func (itr *floatAuxIterator) ExpandSources(sources Sources) (Sources, error) {
-	return nil, errors.New("not implemented")
-}
-
 func (itr *floatAuxIterator) stream() {
 	for {
 		// Read next point.
@@ -1015,8 +988,29 @@ func (itr *floatChanIterator) Next() (*FloatPoint, error) {
 type floatReduceFloatIterator struct {
 	input  *bufFloatIterator
 	create func() (FloatPointAggregator, FloatPointEmitter)
+	dims   []string
 	opt    IteratorOptions
 	points []FloatPoint
+}
+
+func newFloatReduceFloatIterator(input FloatIterator, opt IteratorOptions, createFn func() (FloatPointAggregator, FloatPointEmitter)) *floatReduceFloatIterator {
+	// Retrieve dimensions either from Dimensions or GroupBy. Prefer GroupBy.
+	var dimensions []string
+	if len(opt.Dimensions) > 0 && len(opt.GroupBy) == 0 {
+		dimensions = opt.Dimensions
+	} else if len(opt.GroupBy) > 0 {
+		dimensions = make([]string, 0, len(opt.GroupBy))
+		for dim := range opt.GroupBy {
+			dimensions = append(dimensions, dim)
+		}
+	}
+
+	return &floatReduceFloatIterator{
+		input:  newBufFloatIterator(input),
+		create: createFn,
+		dims:   dimensions,
+		opt:    opt,
+	}
 }
 
 // Stats returns stats from the input iterator.
@@ -1054,11 +1048,20 @@ type floatReduceFloatPoint struct {
 // The previous value for the dimension is passed to fn.
 func (itr *floatReduceFloatIterator) reduce() ([]FloatPoint, error) {
 	// Calculate next window.
-	t, err := itr.input.peekTime()
-	if err != nil {
-		return nil, err
+	var startTime, endTime int64
+	for {
+		p, err := itr.input.Next()
+		if err != nil || p == nil {
+			return nil, err
+		} else if p.Nil {
+			continue
+		}
+
+		// Unread the point so it can be processed.
+		itr.input.unread(p)
+		startTime, endTime = itr.opt.Window(p.Time)
+		break
 	}
-	startTime, endTime := itr.opt.Window(t)
 
 	// Create points by tags.
 	m := make(map[string]*floatReduceFloatPoint)
@@ -1319,8 +1322,29 @@ type floatExprFunc func(a, b float64) float64
 type floatReduceIntegerIterator struct {
 	input  *bufFloatIterator
 	create func() (FloatPointAggregator, IntegerPointEmitter)
+	dims   []string
 	opt    IteratorOptions
 	points []IntegerPoint
+}
+
+func newFloatReduceIntegerIterator(input FloatIterator, opt IteratorOptions, createFn func() (FloatPointAggregator, IntegerPointEmitter)) *floatReduceIntegerIterator {
+	// Retrieve dimensions either from Dimensions or GroupBy. Prefer GroupBy.
+	var dimensions []string
+	if len(opt.Dimensions) > 0 && len(opt.GroupBy) == 0 {
+		dimensions = opt.Dimensions
+	} else if len(opt.GroupBy) > 0 {
+		dimensions = make([]string, 0, len(opt.GroupBy))
+		for dim := range opt.GroupBy {
+			dimensions = append(dimensions, dim)
+		}
+	}
+
+	return &floatReduceIntegerIterator{
+		input:  newBufFloatIterator(input),
+		create: createFn,
+		dims:   dimensions,
+		opt:    opt,
+	}
 }
 
 // Stats returns stats from the input iterator.
@@ -1358,11 +1382,20 @@ type floatReduceIntegerPoint struct {
 // The previous value for the dimension is passed to fn.
 func (itr *floatReduceIntegerIterator) reduce() ([]IntegerPoint, error) {
 	// Calculate next window.
-	t, err := itr.input.peekTime()
-	if err != nil {
-		return nil, err
+	var startTime, endTime int64
+	for {
+		p, err := itr.input.Next()
+		if err != nil || p == nil {
+			return nil, err
+		} else if p.Nil {
+			continue
+		}
+
+		// Unread the point so it can be processed.
+		itr.input.unread(p)
+		startTime, endTime = itr.opt.Window(p.Time)
+		break
 	}
-	startTime, endTime := itr.opt.Window(t)
 
 	// Create points by tags.
 	m := make(map[string]*floatReduceIntegerPoint)
@@ -1627,8 +1660,29 @@ type floatIntegerExprFunc func(a, b float64) int64
 type floatReduceStringIterator struct {
 	input  *bufFloatIterator
 	create func() (FloatPointAggregator, StringPointEmitter)
+	dims   []string
 	opt    IteratorOptions
 	points []StringPoint
+}
+
+func newFloatReduceStringIterator(input FloatIterator, opt IteratorOptions, createFn func() (FloatPointAggregator, StringPointEmitter)) *floatReduceStringIterator {
+	// Retrieve dimensions either from Dimensions or GroupBy. Prefer GroupBy.
+	var dimensions []string
+	if len(opt.Dimensions) > 0 && len(opt.GroupBy) == 0 {
+		dimensions = opt.Dimensions
+	} else if len(opt.GroupBy) > 0 {
+		dimensions = make([]string, 0, len(opt.GroupBy))
+		for dim := range opt.GroupBy {
+			dimensions = append(dimensions, dim)
+		}
+	}
+
+	return &floatReduceStringIterator{
+		input:  newBufFloatIterator(input),
+		create: createFn,
+		dims:   dimensions,
+		opt:    opt,
+	}
 }
 
 // Stats returns stats from the input iterator.
@@ -1666,11 +1720,20 @@ type floatReduceStringPoint struct {
 // The previous value for the dimension is passed to fn.
 func (itr *floatReduceStringIterator) reduce() ([]StringPoint, error) {
 	// Calculate next window.
-	t, err := itr.input.peekTime()
-	if err != nil {
-		return nil, err
+	var startTime, endTime int64
+	for {
+		p, err := itr.input.Next()
+		if err != nil || p == nil {
+			return nil, err
+		} else if p.Nil {
+			continue
+		}
+
+		// Unread the point so it can be processed.
+		itr.input.unread(p)
+		startTime, endTime = itr.opt.Window(p.Time)
+		break
 	}
-	startTime, endTime := itr.opt.Window(t)
 
 	// Create points by tags.
 	m := make(map[string]*floatReduceStringPoint)
@@ -1935,8 +1998,29 @@ type floatStringExprFunc func(a, b float64) string
 type floatReduceBooleanIterator struct {
 	input  *bufFloatIterator
 	create func() (FloatPointAggregator, BooleanPointEmitter)
+	dims   []string
 	opt    IteratorOptions
 	points []BooleanPoint
+}
+
+func newFloatReduceBooleanIterator(input FloatIterator, opt IteratorOptions, createFn func() (FloatPointAggregator, BooleanPointEmitter)) *floatReduceBooleanIterator {
+	// Retrieve dimensions either from Dimensions or GroupBy. Prefer GroupBy.
+	var dimensions []string
+	if len(opt.Dimensions) > 0 && len(opt.GroupBy) == 0 {
+		dimensions = opt.Dimensions
+	} else if len(opt.GroupBy) > 0 {
+		dimensions = make([]string, 0, len(opt.GroupBy))
+		for dim := range opt.GroupBy {
+			dimensions = append(dimensions, dim)
+		}
+	}
+
+	return &floatReduceBooleanIterator{
+		input:  newBufFloatIterator(input),
+		create: createFn,
+		dims:   dimensions,
+		opt:    opt,
+	}
 }
 
 // Stats returns stats from the input iterator.
@@ -1974,11 +2058,20 @@ type floatReduceBooleanPoint struct {
 // The previous value for the dimension is passed to fn.
 func (itr *floatReduceBooleanIterator) reduce() ([]BooleanPoint, error) {
 	// Calculate next window.
-	t, err := itr.input.peekTime()
-	if err != nil {
-		return nil, err
+	var startTime, endTime int64
+	for {
+		p, err := itr.input.Next()
+		if err != nil || p == nil {
+			return nil, err
+		} else if p.Nil {
+			continue
+		}
+
+		// Unread the point so it can be processed.
+		itr.input.unread(p)
+		startTime, endTime = itr.opt.Window(p.Time)
+		break
 	}
-	startTime, endTime := itr.opt.Window(t)
 
 	// Create points by tags.
 	m := make(map[string]*floatReduceBooleanPoint)
@@ -2912,10 +3005,6 @@ func (itr *integerLimitIterator) Next() (*IntegerPoint, error) {
 
 		// Read next point if we're beyond the limit.
 		if itr.opt.Limit > 0 && (itr.n-itr.opt.Offset) > itr.opt.Limit {
-			// If there's no interval, no groups, and a single source then simply exit.
-			if itr.opt.Interval.IsZero() && len(itr.opt.Dimensions) == 0 && len(itr.opt.Sources) == 1 {
-				return nil, nil
-			}
 			continue
 		}
 
@@ -3231,28 +3320,6 @@ func (itr *integerAuxIterator) Iterator(name string, typ DataType) Iterator {
 	return itr.fields.iterator(name, typ)
 }
 
-func (itr *integerAuxIterator) CreateIterator(opt IteratorOptions) (Iterator, error) {
-	expr := opt.Expr
-	if expr == nil {
-		panic("unable to create an iterator with no expression from an aux iterator")
-	}
-
-	switch expr := expr.(type) {
-	case *VarRef:
-		return itr.Iterator(expr.Val, expr.Type), nil
-	default:
-		panic(fmt.Sprintf("invalid expression type for an aux iterator: %T", expr))
-	}
-}
-
-func (itr *integerAuxIterator) FieldDimensions(sources Sources) (fields map[string]DataType, dimensions map[string]struct{}, err error) {
-	return nil, nil, errors.New("not implemented")
-}
-
-func (itr *integerAuxIterator) ExpandSources(sources Sources) (Sources, error) {
-	return nil, errors.New("not implemented")
-}
-
 func (itr *integerAuxIterator) stream() {
 	for {
 		// Read next point.
@@ -3374,8 +3441,29 @@ func (itr *integerChanIterator) Next() (*IntegerPoint, error) {
 type integerReduceFloatIterator struct {
 	input  *bufIntegerIterator
 	create func() (IntegerPointAggregator, FloatPointEmitter)
+	dims   []string
 	opt    IteratorOptions
 	points []FloatPoint
+}
+
+func newIntegerReduceFloatIterator(input IntegerIterator, opt IteratorOptions, createFn func() (IntegerPointAggregator, FloatPointEmitter)) *integerReduceFloatIterator {
+	// Retrieve dimensions either from Dimensions or GroupBy. Prefer GroupBy.
+	var dimensions []string
+	if len(opt.Dimensions) > 0 && len(opt.GroupBy) == 0 {
+		dimensions = opt.Dimensions
+	} else if len(opt.GroupBy) > 0 {
+		dimensions = make([]string, 0, len(opt.GroupBy))
+		for dim := range opt.GroupBy {
+			dimensions = append(dimensions, dim)
+		}
+	}
+
+	return &integerReduceFloatIterator{
+		input:  newBufIntegerIterator(input),
+		create: createFn,
+		dims:   dimensions,
+		opt:    opt,
+	}
 }
 
 // Stats returns stats from the input iterator.
@@ -3413,11 +3501,20 @@ type integerReduceFloatPoint struct {
 // The previous value for the dimension is passed to fn.
 func (itr *integerReduceFloatIterator) reduce() ([]FloatPoint, error) {
 	// Calculate next window.
-	t, err := itr.input.peekTime()
-	if err != nil {
-		return nil, err
+	var startTime, endTime int64
+	for {
+		p, err := itr.input.Next()
+		if err != nil || p == nil {
+			return nil, err
+		} else if p.Nil {
+			continue
+		}
+
+		// Unread the point so it can be processed.
+		itr.input.unread(p)
+		startTime, endTime = itr.opt.Window(p.Time)
+		break
 	}
-	startTime, endTime := itr.opt.Window(t)
 
 	// Create points by tags.
 	m := make(map[string]*integerReduceFloatPoint)
@@ -3682,8 +3779,29 @@ type integerFloatExprFunc func(a, b int64) float64
 type integerReduceIntegerIterator struct {
 	input  *bufIntegerIterator
 	create func() (IntegerPointAggregator, IntegerPointEmitter)
+	dims   []string
 	opt    IteratorOptions
 	points []IntegerPoint
+}
+
+func newIntegerReduceIntegerIterator(input IntegerIterator, opt IteratorOptions, createFn func() (IntegerPointAggregator, IntegerPointEmitter)) *integerReduceIntegerIterator {
+	// Retrieve dimensions either from Dimensions or GroupBy. Prefer GroupBy.
+	var dimensions []string
+	if len(opt.Dimensions) > 0 && len(opt.GroupBy) == 0 {
+		dimensions = opt.Dimensions
+	} else if len(opt.GroupBy) > 0 {
+		dimensions = make([]string, 0, len(opt.GroupBy))
+		for dim := range opt.GroupBy {
+			dimensions = append(dimensions, dim)
+		}
+	}
+
+	return &integerReduceIntegerIterator{
+		input:  newBufIntegerIterator(input),
+		create: createFn,
+		dims:   dimensions,
+		opt:    opt,
+	}
 }
 
 // Stats returns stats from the input iterator.
@@ -3721,11 +3839,20 @@ type integerReduceIntegerPoint struct {
 // The previous value for the dimension is passed to fn.
 func (itr *integerReduceIntegerIterator) reduce() ([]IntegerPoint, error) {
 	// Calculate next window.
-	t, err := itr.input.peekTime()
-	if err != nil {
-		return nil, err
+	var startTime, endTime int64
+	for {
+		p, err := itr.input.Next()
+		if err != nil || p == nil {
+			return nil, err
+		} else if p.Nil {
+			continue
+		}
+
+		// Unread the point so it can be processed.
+		itr.input.unread(p)
+		startTime, endTime = itr.opt.Window(p.Time)
+		break
 	}
-	startTime, endTime := itr.opt.Window(t)
 
 	// Create points by tags.
 	m := make(map[string]*integerReduceIntegerPoint)
@@ -3986,8 +4113,29 @@ type integerExprFunc func(a, b int64) int64
 type integerReduceStringIterator struct {
 	input  *bufIntegerIterator
 	create func() (IntegerPointAggregator, StringPointEmitter)
+	dims   []string
 	opt    IteratorOptions
 	points []StringPoint
+}
+
+func newIntegerReduceStringIterator(input IntegerIterator, opt IteratorOptions, createFn func() (IntegerPointAggregator, StringPointEmitter)) *integerReduceStringIterator {
+	// Retrieve dimensions either from Dimensions or GroupBy. Prefer GroupBy.
+	var dimensions []string
+	if len(opt.Dimensions) > 0 && len(opt.GroupBy) == 0 {
+		dimensions = opt.Dimensions
+	} else if len(opt.GroupBy) > 0 {
+		dimensions = make([]string, 0, len(opt.GroupBy))
+		for dim := range opt.GroupBy {
+			dimensions = append(dimensions, dim)
+		}
+	}
+
+	return &integerReduceStringIterator{
+		input:  newBufIntegerIterator(input),
+		create: createFn,
+		dims:   dimensions,
+		opt:    opt,
+	}
 }
 
 // Stats returns stats from the input iterator.
@@ -4025,11 +4173,20 @@ type integerReduceStringPoint struct {
 // The previous value for the dimension is passed to fn.
 func (itr *integerReduceStringIterator) reduce() ([]StringPoint, error) {
 	// Calculate next window.
-	t, err := itr.input.peekTime()
-	if err != nil {
-		return nil, err
+	var startTime, endTime int64
+	for {
+		p, err := itr.input.Next()
+		if err != nil || p == nil {
+			return nil, err
+		} else if p.Nil {
+			continue
+		}
+
+		// Unread the point so it can be processed.
+		itr.input.unread(p)
+		startTime, endTime = itr.opt.Window(p.Time)
+		break
 	}
-	startTime, endTime := itr.opt.Window(t)
 
 	// Create points by tags.
 	m := make(map[string]*integerReduceStringPoint)
@@ -4294,8 +4451,29 @@ type integerStringExprFunc func(a, b int64) string
 type integerReduceBooleanIterator struct {
 	input  *bufIntegerIterator
 	create func() (IntegerPointAggregator, BooleanPointEmitter)
+	dims   []string
 	opt    IteratorOptions
 	points []BooleanPoint
+}
+
+func newIntegerReduceBooleanIterator(input IntegerIterator, opt IteratorOptions, createFn func() (IntegerPointAggregator, BooleanPointEmitter)) *integerReduceBooleanIterator {
+	// Retrieve dimensions either from Dimensions or GroupBy. Prefer GroupBy.
+	var dimensions []string
+	if len(opt.Dimensions) > 0 && len(opt.GroupBy) == 0 {
+		dimensions = opt.Dimensions
+	} else if len(opt.GroupBy) > 0 {
+		dimensions = make([]string, 0, len(opt.GroupBy))
+		for dim := range opt.GroupBy {
+			dimensions = append(dimensions, dim)
+		}
+	}
+
+	return &integerReduceBooleanIterator{
+		input:  newBufIntegerIterator(input),
+		create: createFn,
+		dims:   dimensions,
+		opt:    opt,
+	}
 }
 
 // Stats returns stats from the input iterator.
@@ -4333,11 +4511,20 @@ type integerReduceBooleanPoint struct {
 // The previous value for the dimension is passed to fn.
 func (itr *integerReduceBooleanIterator) reduce() ([]BooleanPoint, error) {
 	// Calculate next window.
-	t, err := itr.input.peekTime()
-	if err != nil {
-		return nil, err
+	var startTime, endTime int64
+	for {
+		p, err := itr.input.Next()
+		if err != nil || p == nil {
+			return nil, err
+		} else if p.Nil {
+			continue
+		}
+
+		// Unread the point so it can be processed.
+		itr.input.unread(p)
+		startTime, endTime = itr.opt.Window(p.Time)
+		break
 	}
-	startTime, endTime := itr.opt.Window(t)
 
 	// Create points by tags.
 	m := make(map[string]*integerReduceBooleanPoint)
@@ -5271,10 +5458,6 @@ func (itr *stringLimitIterator) Next() (*StringPoint, error) {
 
 		// Read next point if we're beyond the limit.
 		if itr.opt.Limit > 0 && (itr.n-itr.opt.Offset) > itr.opt.Limit {
-			// If there's no interval, no groups, and a single source then simply exit.
-			if itr.opt.Interval.IsZero() && len(itr.opt.Dimensions) == 0 && len(itr.opt.Sources) == 1 {
-				return nil, nil
-			}
 			continue
 		}
 
@@ -5575,28 +5758,6 @@ func (itr *stringAuxIterator) Iterator(name string, typ DataType) Iterator {
 	return itr.fields.iterator(name, typ)
 }
 
-func (itr *stringAuxIterator) CreateIterator(opt IteratorOptions) (Iterator, error) {
-	expr := opt.Expr
-	if expr == nil {
-		panic("unable to create an iterator with no expression from an aux iterator")
-	}
-
-	switch expr := expr.(type) {
-	case *VarRef:
-		return itr.Iterator(expr.Val, expr.Type), nil
-	default:
-		panic(fmt.Sprintf("invalid expression type for an aux iterator: %T", expr))
-	}
-}
-
-func (itr *stringAuxIterator) FieldDimensions(sources Sources) (fields map[string]DataType, dimensions map[string]struct{}, err error) {
-	return nil, nil, errors.New("not implemented")
-}
-
-func (itr *stringAuxIterator) ExpandSources(sources Sources) (Sources, error) {
-	return nil, errors.New("not implemented")
-}
-
 func (itr *stringAuxIterator) stream() {
 	for {
 		// Read next point.
@@ -5718,8 +5879,29 @@ func (itr *stringChanIterator) Next() (*StringPoint, error) {
 type stringReduceFloatIterator struct {
 	input  *bufStringIterator
 	create func() (StringPointAggregator, FloatPointEmitter)
+	dims   []string
 	opt    IteratorOptions
 	points []FloatPoint
+}
+
+func newStringReduceFloatIterator(input StringIterator, opt IteratorOptions, createFn func() (StringPointAggregator, FloatPointEmitter)) *stringReduceFloatIterator {
+	// Retrieve dimensions either from Dimensions or GroupBy. Prefer GroupBy.
+	var dimensions []string
+	if len(opt.Dimensions) > 0 && len(opt.GroupBy) == 0 {
+		dimensions = opt.Dimensions
+	} else if len(opt.GroupBy) > 0 {
+		dimensions = make([]string, 0, len(opt.GroupBy))
+		for dim := range opt.GroupBy {
+			dimensions = append(dimensions, dim)
+		}
+	}
+
+	return &stringReduceFloatIterator{
+		input:  newBufStringIterator(input),
+		create: createFn,
+		dims:   dimensions,
+		opt:    opt,
+	}
 }
 
 // Stats returns stats from the input iterator.
@@ -5757,11 +5939,20 @@ type stringReduceFloatPoint struct {
 // The previous value for the dimension is passed to fn.
 func (itr *stringReduceFloatIterator) reduce() ([]FloatPoint, error) {
 	// Calculate next window.
-	t, err := itr.input.peekTime()
-	if err != nil {
-		return nil, err
+	var startTime, endTime int64
+	for {
+		p, err := itr.input.Next()
+		if err != nil || p == nil {
+			return nil, err
+		} else if p.Nil {
+			continue
+		}
+
+		// Unread the point so it can be processed.
+		itr.input.unread(p)
+		startTime, endTime = itr.opt.Window(p.Time)
+		break
 	}
-	startTime, endTime := itr.opt.Window(t)
 
 	// Create points by tags.
 	m := make(map[string]*stringReduceFloatPoint)
@@ -6026,8 +6217,29 @@ type stringFloatExprFunc func(a, b string) float64
 type stringReduceIntegerIterator struct {
 	input  *bufStringIterator
 	create func() (StringPointAggregator, IntegerPointEmitter)
+	dims   []string
 	opt    IteratorOptions
 	points []IntegerPoint
+}
+
+func newStringReduceIntegerIterator(input StringIterator, opt IteratorOptions, createFn func() (StringPointAggregator, IntegerPointEmitter)) *stringReduceIntegerIterator {
+	// Retrieve dimensions either from Dimensions or GroupBy. Prefer GroupBy.
+	var dimensions []string
+	if len(opt.Dimensions) > 0 && len(opt.GroupBy) == 0 {
+		dimensions = opt.Dimensions
+	} else if len(opt.GroupBy) > 0 {
+		dimensions = make([]string, 0, len(opt.GroupBy))
+		for dim := range opt.GroupBy {
+			dimensions = append(dimensions, dim)
+		}
+	}
+
+	return &stringReduceIntegerIterator{
+		input:  newBufStringIterator(input),
+		create: createFn,
+		dims:   dimensions,
+		opt:    opt,
+	}
 }
 
 // Stats returns stats from the input iterator.
@@ -6065,11 +6277,20 @@ type stringReduceIntegerPoint struct {
 // The previous value for the dimension is passed to fn.
 func (itr *stringReduceIntegerIterator) reduce() ([]IntegerPoint, error) {
 	// Calculate next window.
-	t, err := itr.input.peekTime()
-	if err != nil {
-		return nil, err
+	var startTime, endTime int64
+	for {
+		p, err := itr.input.Next()
+		if err != nil || p == nil {
+			return nil, err
+		} else if p.Nil {
+			continue
+		}
+
+		// Unread the point so it can be processed.
+		itr.input.unread(p)
+		startTime, endTime = itr.opt.Window(p.Time)
+		break
 	}
-	startTime, endTime := itr.opt.Window(t)
 
 	// Create points by tags.
 	m := make(map[string]*stringReduceIntegerPoint)
@@ -6334,8 +6555,29 @@ type stringIntegerExprFunc func(a, b string) int64
 type stringReduceStringIterator struct {
 	input  *bufStringIterator
 	create func() (StringPointAggregator, StringPointEmitter)
+	dims   []string
 	opt    IteratorOptions
 	points []StringPoint
+}
+
+func newStringReduceStringIterator(input StringIterator, opt IteratorOptions, createFn func() (StringPointAggregator, StringPointEmitter)) *stringReduceStringIterator {
+	// Retrieve dimensions either from Dimensions or GroupBy. Prefer GroupBy.
+	var dimensions []string
+	if len(opt.Dimensions) > 0 && len(opt.GroupBy) == 0 {
+		dimensions = opt.Dimensions
+	} else if len(opt.GroupBy) > 0 {
+		dimensions = make([]string, 0, len(opt.GroupBy))
+		for dim := range opt.GroupBy {
+			dimensions = append(dimensions, dim)
+		}
+	}
+
+	return &stringReduceStringIterator{
+		input:  newBufStringIterator(input),
+		create: createFn,
+		dims:   dimensions,
+		opt:    opt,
+	}
 }
 
 // Stats returns stats from the input iterator.
@@ -6373,11 +6615,20 @@ type stringReduceStringPoint struct {
 // The previous value for the dimension is passed to fn.
 func (itr *stringReduceStringIterator) reduce() ([]StringPoint, error) {
 	// Calculate next window.
-	t, err := itr.input.peekTime()
-	if err != nil {
-		return nil, err
+	var startTime, endTime int64
+	for {
+		p, err := itr.input.Next()
+		if err != nil || p == nil {
+			return nil, err
+		} else if p.Nil {
+			continue
+		}
+
+		// Unread the point so it can be processed.
+		itr.input.unread(p)
+		startTime, endTime = itr.opt.Window(p.Time)
+		break
 	}
-	startTime, endTime := itr.opt.Window(t)
 
 	// Create points by tags.
 	m := make(map[string]*stringReduceStringPoint)
@@ -6638,8 +6889,29 @@ type stringExprFunc func(a, b string) string
 type stringReduceBooleanIterator struct {
 	input  *bufStringIterator
 	create func() (StringPointAggregator, BooleanPointEmitter)
+	dims   []string
 	opt    IteratorOptions
 	points []BooleanPoint
+}
+
+func newStringReduceBooleanIterator(input StringIterator, opt IteratorOptions, createFn func() (StringPointAggregator, BooleanPointEmitter)) *stringReduceBooleanIterator {
+	// Retrieve dimensions either from Dimensions or GroupBy. Prefer GroupBy.
+	var dimensions []string
+	if len(opt.Dimensions) > 0 && len(opt.GroupBy) == 0 {
+		dimensions = opt.Dimensions
+	} else if len(opt.GroupBy) > 0 {
+		dimensions = make([]string, 0, len(opt.GroupBy))
+		for dim := range opt.GroupBy {
+			dimensions = append(dimensions, dim)
+		}
+	}
+
+	return &stringReduceBooleanIterator{
+		input:  newBufStringIterator(input),
+		create: createFn,
+		dims:   dimensions,
+		opt:    opt,
+	}
 }
 
 // Stats returns stats from the input iterator.
@@ -6677,11 +6949,20 @@ type stringReduceBooleanPoint struct {
 // The previous value for the dimension is passed to fn.
 func (itr *stringReduceBooleanIterator) reduce() ([]BooleanPoint, error) {
 	// Calculate next window.
-	t, err := itr.input.peekTime()
-	if err != nil {
-		return nil, err
+	var startTime, endTime int64
+	for {
+		p, err := itr.input.Next()
+		if err != nil || p == nil {
+			return nil, err
+		} else if p.Nil {
+			continue
+		}
+
+		// Unread the point so it can be processed.
+		itr.input.unread(p)
+		startTime, endTime = itr.opt.Window(p.Time)
+		break
 	}
-	startTime, endTime := itr.opt.Window(t)
 
 	// Create points by tags.
 	m := make(map[string]*stringReduceBooleanPoint)
@@ -7615,10 +7896,6 @@ func (itr *booleanLimitIterator) Next() (*BooleanPoint, error) {
 
 		// Read next point if we're beyond the limit.
 		if itr.opt.Limit > 0 && (itr.n-itr.opt.Offset) > itr.opt.Limit {
-			// If there's no interval, no groups, and a single source then simply exit.
-			if itr.opt.Interval.IsZero() && len(itr.opt.Dimensions) == 0 && len(itr.opt.Sources) == 1 {
-				return nil, nil
-			}
 			continue
 		}
 
@@ -7919,28 +8196,6 @@ func (itr *booleanAuxIterator) Iterator(name string, typ DataType) Iterator {
 	return itr.fields.iterator(name, typ)
 }
 
-func (itr *booleanAuxIterator) CreateIterator(opt IteratorOptions) (Iterator, error) {
-	expr := opt.Expr
-	if expr == nil {
-		panic("unable to create an iterator with no expression from an aux iterator")
-	}
-
-	switch expr := expr.(type) {
-	case *VarRef:
-		return itr.Iterator(expr.Val, expr.Type), nil
-	default:
-		panic(fmt.Sprintf("invalid expression type for an aux iterator: %T", expr))
-	}
-}
-
-func (itr *booleanAuxIterator) FieldDimensions(sources Sources) (fields map[string]DataType, dimensions map[string]struct{}, err error) {
-	return nil, nil, errors.New("not implemented")
-}
-
-func (itr *booleanAuxIterator) ExpandSources(sources Sources) (Sources, error) {
-	return nil, errors.New("not implemented")
-}
-
 func (itr *booleanAuxIterator) stream() {
 	for {
 		// Read next point.
@@ -8062,8 +8317,29 @@ func (itr *booleanChanIterator) Next() (*BooleanPoint, error) {
 type booleanReduceFloatIterator struct {
 	input  *bufBooleanIterator
 	create func() (BooleanPointAggregator, FloatPointEmitter)
+	dims   []string
 	opt    IteratorOptions
 	points []FloatPoint
+}
+
+func newBooleanReduceFloatIterator(input BooleanIterator, opt IteratorOptions, createFn func() (BooleanPointAggregator, FloatPointEmitter)) *booleanReduceFloatIterator {
+	// Retrieve dimensions either from Dimensions or GroupBy. Prefer GroupBy.
+	var dimensions []string
+	if len(opt.Dimensions) > 0 && len(opt.GroupBy) == 0 {
+		dimensions = opt.Dimensions
+	} else if len(opt.GroupBy) > 0 {
+		dimensions = make([]string, 0, len(opt.GroupBy))
+		for dim := range opt.GroupBy {
+			dimensions = append(dimensions, dim)
+		}
+	}
+
+	return &booleanReduceFloatIterator{
+		input:  newBufBooleanIterator(input),
+		create: createFn,
+		dims:   dimensions,
+		opt:    opt,
+	}
 }
 
 // Stats returns stats from the input iterator.
@@ -8101,11 +8377,20 @@ type booleanReduceFloatPoint struct {
 // The previous value for the dimension is passed to fn.
 func (itr *booleanReduceFloatIterator) reduce() ([]FloatPoint, error) {
 	// Calculate next window.
-	t, err := itr.input.peekTime()
-	if err != nil {
-		return nil, err
+	var startTime, endTime int64
+	for {
+		p, err := itr.input.Next()
+		if err != nil || p == nil {
+			return nil, err
+		} else if p.Nil {
+			continue
+		}
+
+		// Unread the point so it can be processed.
+		itr.input.unread(p)
+		startTime, endTime = itr.opt.Window(p.Time)
+		break
 	}
-	startTime, endTime := itr.opt.Window(t)
 
 	// Create points by tags.
 	m := make(map[string]*booleanReduceFloatPoint)
@@ -8370,8 +8655,29 @@ type booleanFloatExprFunc func(a, b bool) float64
 type booleanReduceIntegerIterator struct {
 	input  *bufBooleanIterator
 	create func() (BooleanPointAggregator, IntegerPointEmitter)
+	dims   []string
 	opt    IteratorOptions
 	points []IntegerPoint
+}
+
+func newBooleanReduceIntegerIterator(input BooleanIterator, opt IteratorOptions, createFn func() (BooleanPointAggregator, IntegerPointEmitter)) *booleanReduceIntegerIterator {
+	// Retrieve dimensions either from Dimensions or GroupBy. Prefer GroupBy.
+	var dimensions []string
+	if len(opt.Dimensions) > 0 && len(opt.GroupBy) == 0 {
+		dimensions = opt.Dimensions
+	} else if len(opt.GroupBy) > 0 {
+		dimensions = make([]string, 0, len(opt.GroupBy))
+		for dim := range opt.GroupBy {
+			dimensions = append(dimensions, dim)
+		}
+	}
+
+	return &booleanReduceIntegerIterator{
+		input:  newBufBooleanIterator(input),
+		create: createFn,
+		dims:   dimensions,
+		opt:    opt,
+	}
 }
 
 // Stats returns stats from the input iterator.
@@ -8409,11 +8715,20 @@ type booleanReduceIntegerPoint struct {
 // The previous value for the dimension is passed to fn.
 func (itr *booleanReduceIntegerIterator) reduce() ([]IntegerPoint, error) {
 	// Calculate next window.
-	t, err := itr.input.peekTime()
-	if err != nil {
-		return nil, err
+	var startTime, endTime int64
+	for {
+		p, err := itr.input.Next()
+		if err != nil || p == nil {
+			return nil, err
+		} else if p.Nil {
+			continue
+		}
+
+		// Unread the point so it can be processed.
+		itr.input.unread(p)
+		startTime, endTime = itr.opt.Window(p.Time)
+		break
 	}
-	startTime, endTime := itr.opt.Window(t)
 
 	// Create points by tags.
 	m := make(map[string]*booleanReduceIntegerPoint)
@@ -8678,8 +8993,29 @@ type booleanIntegerExprFunc func(a, b bool) int64
 type booleanReduceStringIterator struct {
 	input  *bufBooleanIterator
 	create func() (BooleanPointAggregator, StringPointEmitter)
+	dims   []string
 	opt    IteratorOptions
 	points []StringPoint
+}
+
+func newBooleanReduceStringIterator(input BooleanIterator, opt IteratorOptions, createFn func() (BooleanPointAggregator, StringPointEmitter)) *booleanReduceStringIterator {
+	// Retrieve dimensions either from Dimensions or GroupBy. Prefer GroupBy.
+	var dimensions []string
+	if len(opt.Dimensions) > 0 && len(opt.GroupBy) == 0 {
+		dimensions = opt.Dimensions
+	} else if len(opt.GroupBy) > 0 {
+		dimensions = make([]string, 0, len(opt.GroupBy))
+		for dim := range opt.GroupBy {
+			dimensions = append(dimensions, dim)
+		}
+	}
+
+	return &booleanReduceStringIterator{
+		input:  newBufBooleanIterator(input),
+		create: createFn,
+		dims:   dimensions,
+		opt:    opt,
+	}
 }
 
 // Stats returns stats from the input iterator.
@@ -8717,11 +9053,20 @@ type booleanReduceStringPoint struct {
 // The previous value for the dimension is passed to fn.
 func (itr *booleanReduceStringIterator) reduce() ([]StringPoint, error) {
 	// Calculate next window.
-	t, err := itr.input.peekTime()
-	if err != nil {
-		return nil, err
+	var startTime, endTime int64
+	for {
+		p, err := itr.input.Next()
+		if err != nil || p == nil {
+			return nil, err
+		} else if p.Nil {
+			continue
+		}
+
+		// Unread the point so it can be processed.
+		itr.input.unread(p)
+		startTime, endTime = itr.opt.Window(p.Time)
+		break
 	}
-	startTime, endTime := itr.opt.Window(t)
 
 	// Create points by tags.
 	m := make(map[string]*booleanReduceStringPoint)
@@ -8986,8 +9331,29 @@ type booleanStringExprFunc func(a, b bool) string
 type booleanReduceBooleanIterator struct {
 	input  *bufBooleanIterator
 	create func() (BooleanPointAggregator, BooleanPointEmitter)
+	dims   []string
 	opt    IteratorOptions
 	points []BooleanPoint
+}
+
+func newBooleanReduceBooleanIterator(input BooleanIterator, opt IteratorOptions, createFn func() (BooleanPointAggregator, BooleanPointEmitter)) *booleanReduceBooleanIterator {
+	// Retrieve dimensions either from Dimensions or GroupBy. Prefer GroupBy.
+	var dimensions []string
+	if len(opt.Dimensions) > 0 && len(opt.GroupBy) == 0 {
+		dimensions = opt.Dimensions
+	} else if len(opt.GroupBy) > 0 {
+		dimensions = make([]string, 0, len(opt.GroupBy))
+		for dim := range opt.GroupBy {
+			dimensions = append(dimensions, dim)
+		}
+	}
+
+	return &booleanReduceBooleanIterator{
+		input:  newBufBooleanIterator(input),
+		create: createFn,
+		dims:   dimensions,
+		opt:    opt,
+	}
 }
 
 // Stats returns stats from the input iterator.
@@ -9025,11 +9391,20 @@ type booleanReduceBooleanPoint struct {
 // The previous value for the dimension is passed to fn.
 func (itr *booleanReduceBooleanIterator) reduce() ([]BooleanPoint, error) {
 	// Calculate next window.
-	t, err := itr.input.peekTime()
-	if err != nil {
-		return nil, err
+	var startTime, endTime int64
+	for {
+		p, err := itr.input.Next()
+		if err != nil || p == nil {
+			return nil, err
+		} else if p.Nil {
+			continue
+		}
+
+		// Unread the point so it can be processed.
+		itr.input.unread(p)
+		startTime, endTime = itr.opt.Window(p.Time)
+		break
 	}
-	startTime, endTime := itr.opt.Window(t)
 
 	// Create points by tags.
 	m := make(map[string]*booleanReduceBooleanPoint)
