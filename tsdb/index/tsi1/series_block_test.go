@@ -2,6 +2,7 @@ package tsi1_test
 
 import (
 	"bytes"
+	"encoding/binary"
 	"fmt"
 	"reflect"
 	"testing"
@@ -9,6 +10,41 @@ import (
 	"github.com/influxdata/influxdb/models"
 	"github.com/influxdata/influxdb/tsdb/index/tsi1"
 )
+
+func TestReadSeriesBlockTrailer(t *testing.T) {
+	// Build a trailer
+	var (
+		data                       = make([]byte, tsi1.SeriesBlockTrailerSize)
+		termOffset, termSize       = uint64(1), uint64(2500)
+		dataOffset, dataSize       = uint64(2501), uint64(1000)
+		sketchOffset, sketchSize   = uint64(3501), uint64(250)
+		tsketchOffset, tsketchSize = uint64(3751), uint64(250)
+	)
+
+	binary.BigEndian.PutUint64(data[0:], termOffset)
+	binary.BigEndian.PutUint64(data[8:], termSize)
+	binary.BigEndian.PutUint64(data[16:], dataOffset)
+	binary.BigEndian.PutUint64(data[24:], dataSize)
+	binary.BigEndian.PutUint64(data[32:], sketchOffset)
+	binary.BigEndian.PutUint64(data[40:], sketchSize)
+	binary.BigEndian.PutUint64(data[48:], tsketchOffset)
+	binary.BigEndian.PutUint64(data[56:], tsketchSize)
+
+	trailer := tsi1.ReadSeriesBlockTrailer(data)
+	ok := true &&
+		trailer.TermList.Offset == int64(termOffset) &&
+		trailer.TermList.Size == int64(termSize) &&
+		trailer.SeriesData.Offset == int64(dataOffset) &&
+		trailer.SeriesData.Size == int64(dataSize) &&
+		trailer.Sketch.Offset == int64(sketchOffset) &&
+		trailer.Sketch.Size == int64(sketchSize) &&
+		trailer.TSketch.Offset == int64(tsketchOffset) &&
+		trailer.TSketch.Size == int64(tsketchSize)
+
+	if !ok {
+		t.Fatalf("got %v\nwhich does not match expected", trailer)
+	}
+}
 
 // Ensure series block can be unmarshaled.
 func TestSeriesBlock_UnmarshalBinary(t *testing.T) {
