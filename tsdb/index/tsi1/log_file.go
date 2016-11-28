@@ -10,8 +10,11 @@ import (
 	"sort"
 	"sync"
 
+	"github.com/influxdata/influxdb/pkg/estimator/hll"
+
 	"github.com/influxdata/influxdb/influxql"
 	"github.com/influxdata/influxdb/models"
+	"github.com/influxdata/influxdb/pkg/estimator"
 	"github.com/influxdata/influxdb/pkg/mmap"
 )
 
@@ -36,6 +39,9 @@ type LogFile struct {
 	buf     []byte     // marshaling buffer
 	entries []LogEntry // parsed entries
 
+	mSketch, mTSketch estimator.Sketch // Measurement sketches
+	sSketch, sTSketch estimator.Sketch // Series sketche
+
 	// In-memory index.
 	mms logMeasurements
 
@@ -46,7 +52,11 @@ type LogFile struct {
 // NewLogFile returns a new instance of LogFile.
 func NewLogFile() *LogFile {
 	return &LogFile{
-		mms: make(logMeasurements),
+		mms:      make(logMeasurements),
+		mSketch:  hll.NewDefaultPlus(),
+		mTSketch: hll.NewDefaultPlus(),
+		sSketch:  hll.NewDefaultPlus(),
+		sTSketch: hll.NewDefaultPlus(),
 	}
 }
 
@@ -389,6 +399,9 @@ func (f *LogFile) execDeleteMeasurementEntry(e *LogEntry) {
 	mm.tagSet = make(map[string]logTagKey)
 	mm.series = nil
 	f.mms[string(e.Name)] = mm
+
+	// Update measurement tombstone sketch.
+	f.mTSketch.Add(e.Name)
 }
 
 func (f *LogFile) execDeleteTagKeyEntry(e *LogEntry) {
@@ -446,6 +459,21 @@ func (f *LogFile) execSeriesEntry(e *LogEntry) {
 
 	// Save measurement.
 	f.mms[string(e.Name)] = mm
+
+	// Update the sketches...
+
+	if deleted {
+		// FIXME(edd): build series key
+		f.sTSketch.Add([]byte("FIXME")) // Deleting series so update tombstone sketch.
+
+		// TODO(edd): If this is the last series in the measurement, how will
+		// we update the measurement tombstone sketch?
+		// f.mTSketch.Add([]byte("FIXME"))
+		return
+	}
+
+	f.sSketch.Add([]byte("FIXME")) // Add series to sketch.
+	f.mSketch.Add(e.Name)          // Add measurement to sketch.
 }
 
 // SeriesIterator returns an iterator over all series in the log file.
@@ -567,6 +595,9 @@ func (f *LogFile) writeSeriesBlockTo(w io.Writer, n *int64) error {
 		}
 	}
 
+	// Set the series sketches.
+	sw.sketch, sw.tsketch = f.sSketch, f.sTSketch
+
 	// Flush series list.
 	nn, err := sw.WriteTo(w)
 	*n += nn
@@ -659,6 +690,9 @@ func (f *LogFile) writeMeasurementBlockTo(w io.Writer, names []string, n *int64)
 	for _, mm := range f.mms {
 		mw.Add(mm.name, mm.offset, mm.size, mm.seriesIDs)
 	}
+
+	// Set the measurement sketches so they're written into the index file.
+	mw.sketch, mw.tsketch = f.mSketch, f.mTSketch
 
 	// Write data to writer.
 	nn, err := mw.WriteTo(w)
