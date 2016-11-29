@@ -473,9 +473,12 @@ func (i *Index) DropMeasurement(name []byte) error {
 
 // CreateSeriesIfNotExists creates a series if it doesn't exist or is deleted.
 func (i *Index) CreateSeriesIfNotExists(key, name []byte, tags models.Tags) error {
+	// FIXME: this should be something like HasSeries
 	if e := i.Series(name, tags); e != nil {
 		return nil
 	}
+
+	// FIXME(edd): check for series count.
 	return i.logFiles[0].AddSeries(name, tags)
 }
 
@@ -501,13 +504,6 @@ func (i *Index) DropSeries(keys [][]byte) error {
 		}
 	}
 	return nil
-}
-
-func (i *Index) SeriesN() (n uint64, err error) {
-	// FIXME(edd): Use sketches.
-
-	// HACK(benbjohnson): Use first log file until edd adds sketches.
-	return i.logFiles[0].SeriesN(), nil
 }
 
 func (i *Index) sketches(nextSketches func(*IndexFile) (estimator.Sketch, estimator.Sketch)) (estimator.Sketch, estimator.Sketch, error) {
