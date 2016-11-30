@@ -19,6 +19,7 @@
 - [#7650](https://github.com/influxdata/influxdb/issues/7650): Ensures that all user privileges associated with a database are removed when the database is dropped.
 - [#7659](https://github.com/influxdata/influxdb/issues/7659): Fix CLI import bug when using self-signed SSL certificates.
 
+- [#7563](https://github.com/influxdata/influxdb/issues/7563): RP should not allow `INF` or `0` as a shard duration.
 
 ## v1.1.1 [unreleased]
 
