@@ -3,10 +3,7 @@ package subscriber // import "github.com/influxdata/influxdb/services/subscriber
 import (
 	"errors"
 	"fmt"
-	"io"
-	"log"
 	"net/url"
-	"os"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -15,6 +12,7 @@ import (
 	"github.com/influxdata/influxdb/models"
 	"github.com/influxdata/influxdb/monitor"
 	"github.com/influxdata/influxdb/services/meta"
+	"github.com/uber-go/zap"
 )
 
 // Statistics for the Subscriber service.
@@ -46,7 +44,7 @@ type Service struct {
 		WaitForDataChanged() chan struct{}
 	}
 	NewPointsWriter func(u url.URL) (PointsWriter, error)
-	Logger          *log.Logger
+	Logger          zap.Logger
 	update          chan struct{}
 	stats           *Statistics
 	points          chan *coordinator.WritePointsRequest
@@ -63,7 +61,7 @@ type Service struct {
 // NewService returns a subscriber service with given settings
 func NewService(c Config) *Service {
 	s := &Service{
-		Logger: log.New(os.Stderr, "[subscriber] ", log.LstdFlags),
+		Logger: zap.New(zap.NullEncoder()),
 		closed: true,
 		stats:  &Statistics{},
 		conf:   c,
@@ -96,7 +94,7 @@ func (s *Service) Open() error {
 		s.waitForMetaUpdates()
 	}()
 
-	s.Logger.Println("opened service")
+	s.Logger.Info("opened service")
 	return nil
 }
 
@@ -111,14 +109,12 @@ func (s *Service) Close() error {
 	close(s.closing)
 
 	s.wg.Wait()
-	s.Logger.Println("closed service")
+	s.Logger.Info("closed service")
 	return nil
 }
 
-// SetLogOutput sets the writer to which all logs are written. It must not be
-// called after Open is called.
-func (s *Service) SetLogOutput(w io.Writer) {
-	s.Logger = log.New(w, "[subscriber] ", log.LstdFlags)
+func (s *Service) WithLogger(log zap.Logger) {
+	s.Logger = log.With(zap.String("service", "subscriber"))
 }
 
 // Statistics maintains the statistics for the subscriber service.
@@ -154,7 +150,7 @@ func (s *Service) waitForMetaUpdates() {
 		case <-ch:
 			err := s.Update()
 			if err != nil {
-				s.Logger.Println("error updating subscriptions:", err)
+				s.Logger.Info(fmt.Sprint("error updating subscriptions: ", err))
 			}
 		case <-s.closing:
 			return
@@ -226,7 +222,7 @@ func (s *Service) run() {
 		case <-s.update:
 			err := s.updateSubs(&wg)
 			if err != nil {
-				s.Logger.Println("failed to update subscriptions:", err)
+				s.Logger.Info(fmt.Sprint("failed to update subscriptions: ", err))
 			}
 		case p, ok := <-s.points:
 			if !ok {
@@ -302,7 +298,7 @@ func (s *Service) updateSubs(wg *sync.WaitGroup) error {
 					}()
 				}
 				s.subs[se] = cw
-				s.Logger.Println("added new subscription for", se.db, se.rp)
+				s.Logger.Info(fmt.Sprintf("added new subscription for %s %s", se.db, se.rp))
 			}
 		}
 	}
@@ -315,7 +311,7 @@ func (s *Service) updateSubs(wg *sync.WaitGroup) error {
 
 			// Remove it from the set
 			delete(s.subs, se)
-			s.Logger.Println("deleted old subscription for", se.db, se.rp)
+			s.Logger.Info(fmt.Sprintf("deleted old subscription for %s %s", se.db, se.rp))
 		}
 	}
 
@@ -331,7 +327,7 @@ func (s *Service) newPointsWriter(u url.URL) (PointsWriter, error) {
 		return NewHTTP(u.String(), time.Duration(s.conf.HTTPTimeout))
 	case "https":
 		if s.conf.InsecureSkipVerify {
-			s.Logger.Println("WARNING: 'insecure-skip-verify' is true. This will skip all certificate verifications.")
+			s.Logger.Info("WARNING: 'insecure-skip-verify' is true. This will skip all certificate verifications.")
 		}
 		return NewHTTPS(u.String(), time.Duration(s.conf.HTTPTimeout), s.conf.InsecureSkipVerify, s.conf.CaCerts)
 	default:
@@ -345,7 +341,7 @@ type chanWriter struct {
 	pw            PointsWriter
 	pointsWritten *int64
 	failures      *int64
-	logger        *log.Logger
+	logger        zap.Logger
 }
 
 // Close the chanWriter
@@ -357,7 +353,7 @@ func (c chanWriter) Run() {
 	for wr := range c.writeRequests {
 		err := c.pw.WritePoints(wr)
 		if err != nil {
-			c.logger.Println(err)
+			c.logger.Info(err.Error())
 			atomic.AddInt64(c.failures, 1)
 		} else {
 			atomic.AddInt64(c.pointsWritten, int64(len(wr.Points)))
