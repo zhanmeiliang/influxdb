@@ -14,7 +14,6 @@ The stress tool `influx_stress` will be removed in a subsequent release. We reco
 - [#7356](https://github.com/influxdata/influxdb/issues/7356): Use X-Forwarded-For IP address in HTTP logger if present.
 - [#7601](https://github.com/influxdata/influxdb/issues/7601): Prune data in meta store for deleted shards.
 - [#7669](https://github.com/influxdata/influxdb/issues/7669): Uncomment section headers from the default configuration file.
-- [#7684](https://github.com/influxdata/influxdb/issues/7684): Update Go version to 1.7.4.
 
 ### Bugfixes
 
@@ -25,15 +24,24 @@ The stress tool `influx_stress` will be removed in a subsequent release. We reco
 - [#7659](https://github.com/influxdata/influxdb/issues/7659): Fix CLI import bug when using self-signed SSL certificates.
 - [#7698](https://github.com/influxdata/influxdb/pull/7698): CLI was caching db/rp for insert into statements.
 - [#6527](https://github.com/influxdata/influxdb/issues/6527): 0.12.2 Influx CLI client PRECISION returns "Unknown precision....
-
 - [#7396](https://github.com/influxdata/influxdb/issues/7396): CLI should use spaces for alignment, not tabs.
+- [#7634](https://github.com/influxdata/influxdb/issues/7634): Return the time from a percentile call on an integer.
 
-## v1.1.1 [unreleased]
+## v1.1.1 [2016-12-06]
+
+### Features
+
+- [#7684](https://github.com/influxdata/influxdb/issues/7684): Update Go version to 1.7.4.
 
 ### Bugfixes
 
 - [#7625](https://github.com/influxdata/influxdb/issues/7625): Fix incorrect tag value in error message.
-- [#7634](https://github.com/influxdata/influxdb/issues/7634): Return the time from a percentile call on an integer.
+- [#7661](https://github.com/influxdata/influxdb/pull/7661): Quote the empty string as an ident.
+- [#7679](https://github.com/influxdata/influxdb/pull/7679): Fix string fields w/ trailing slashes
+
+### Security
+
+[Go 1.7.4](https://golang.org/doc/devel/release.html#go1.7.minor) was released to address two security issues.  This release includes these security fixes.
 
 ## v1.1.0 [2016-11-14]
 
